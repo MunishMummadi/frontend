@@ -19,6 +19,7 @@ export function MapboxMap({ providers, center, selectedProvider, onMarkerClick }
   const mapContainer = useRef<HTMLDivElement>(null)
   const map = useRef<mapboxgl.Map | null>(null)
   const markersRef = useRef<{ [id: string]: mapboxgl.Marker }>({})
+  const popupsRef = useRef<{ [id: string]: mapboxgl.Popup }>({})
   const [mapInitialized, setMapInitialized] = useState(false)
   const [viewportWidth, setViewportWidth] = useState(0)
 
@@ -98,9 +99,11 @@ export function MapboxMap({ providers, center, selectedProvider, onMarkerClick }
     // Clean up on unmount
     return () => {
       if (map.current) map.current.remove()
-      // Clear all markers
+      // Clear all markers and popups
       Object.values(markersRef.current).forEach(marker => marker.remove())
+      Object.values(popupsRef.current).forEach(popup => popup.remove())
       markersRef.current = {}
+      popupsRef.current = {}
     }
   }, [])
 
@@ -124,13 +127,42 @@ export function MapboxMap({ providers, center, selectedProvider, onMarkerClick }
     }
   }, [viewportWidth])
 
+  // Create popup HTML for a provider
+  const createPopupHTML = (provider: Provider, index: number) => {
+    // Create a clean, accessible popup with essential information
+    return `
+      <div class="map-popup" style="width: 250px; padding: 8px;">
+        <h3 style="margin: 0 0 8px; font-size: 16px; font-weight: 600; color: #1a202c;">${provider.name || 'Healthcare Provider'}</h3>
+        ${provider.formattedAddress ? 
+          `<p style="margin: 0 0 6px; font-size: 14px; color: #4a5568; display: flex; align-items: start;">
+            <span style="margin-right: 4px; flex-shrink: 0;">📍</span> 
+            <span style="line-height: 1.4;">${provider.formattedAddress}</span>
+          </p>` : ''}
+        ${provider.rating ? 
+          `<p style="margin: 0 0 6px; font-size: 14px; color: #4a5568;">
+            ⭐ ${provider.rating} ${provider.user_ratings_total ? `(${provider.user_ratings_total})` : ''}
+          </p>` : ''}
+        <button 
+          class="marker-details-btn" 
+          style="background: #3182ce; color: white; border: none; padding: 6px 12px; 
+          border-radius: 4px; cursor: pointer; font-size: 14px; width: 100%; margin-top: 8px;"
+          data-provider-id="${provider.id}"
+        >
+          View Details
+        </button>
+      </div>
+    `;
+  };
+
   // Add markers for providers
   useEffect(() => {
     if (!map.current || !mapInitialized || !providers.length) return
 
-    // Clear existing markers
+    // Clear existing markers and popups
     Object.values(markersRef.current).forEach(marker => marker.remove())
+    Object.values(popupsRef.current).forEach(popup => popup.remove())
     markersRef.current = {}
+    popupsRef.current = {}
 
     // Add new markers
     providers.forEach((provider, index) => {
@@ -164,6 +196,29 @@ export function MapboxMap({ providers, center, selectedProvider, onMarkerClick }
         el.style.transform = 'scale(1.1)'
       }
 
+      // Create popup
+      const popup = new mapboxgl.Popup({
+        offset: [0, -20],
+        closeButton: true,
+        closeOnClick: false,
+        maxWidth: '300px'
+      }).setHTML(createPopupHTML(provider, index));
+      
+      // Store popup reference
+      popupsRef.current[provider.id] = popup;
+      
+      // Add event listener to popup for details button clicks
+      popup.on('open', () => {
+        setTimeout(() => {
+          const detailsButton = document.querySelector(`.marker-details-btn[data-provider-id="${provider.id}"]`);
+          if (detailsButton) {
+            detailsButton.addEventListener('click', () => {
+              onMarkerClick(provider);
+            });
+          }
+        }, 100);
+      });
+
       // Create and add the marker
       const marker = new mapboxgl.Marker({
         element: el,
@@ -174,12 +229,30 @@ export function MapboxMap({ providers, center, selectedProvider, onMarkerClick }
           typeof provider.lng === 'string' ? parseFloat(provider.lng) : provider.lng,
           typeof provider.lat === 'string' ? parseFloat(provider.lat) : provider.lat
         ])
+        .setPopup(popup)
         .addTo(map.current)
 
-      // Add click event
-      el.addEventListener('click', () => {
-        onMarkerClick(provider)
-      })
+      // Add click event to marker
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        
+        // Toggle popup
+        if (marker.getPopup().isOpen()) {
+          marker.getPopup().remove();
+        } else {
+          // Close any other open popups
+          Object.values(markersRef.current).forEach(m => {
+            if (m.getPopup().isOpen()) {
+              m.getPopup().remove();
+            }
+          });
+          
+          marker.togglePopup();
+        }
+        
+        // Call onMarkerClick callback
+        onMarkerClick(provider);
+      });
       
       // Add hover effect
       el.addEventListener('mouseenter', () => {
@@ -208,16 +281,50 @@ export function MapboxMap({ providers, center, selectedProvider, onMarkerClick }
         }
       })
       
-      map.current.fitBounds(bounds, {
-        padding: {
-          top: 50,
-          bottom: 50,
-          left: 50,
-          right: 50
-        },
-        maxZoom: 14,
-        bearing: 0 // Keep north orientation when fitting bounds
-      })
+      // Only adjust bounds if they're valid
+      if (!bounds.isEmpty()) {
+        map.current.fitBounds(bounds, {
+          padding: {
+            top: 70,
+            bottom: 70,
+            left: 70,
+            right: 70
+          },
+          maxZoom: 14,
+          bearing: 0 // Keep north orientation when fitting bounds
+        })
+      }
+    }
+    
+    // If there's a selected provider, make sure its popup is open
+    if (selectedProvider && markersRef.current[selectedProvider.id]) {
+      const marker = markersRef.current[selectedProvider.id];
+      
+      // First close all popups
+      Object.values(markersRef.current).forEach(m => {
+        if (m.getPopup().isOpen()) {
+          m.getPopup().remove();
+        }
+      });
+      
+      // Then open the popup for the selected provider and fly to it
+      setTimeout(() => {
+        if (map.current && marker) {
+          const markerPosition = marker.getLngLat();
+          map.current.flyTo({
+            center: markerPosition,
+            zoom: 14,
+            bearing: 0,
+            essential: true,
+            duration: 1000
+          });
+          
+          // Open the popup after a slight delay
+          setTimeout(() => {
+            marker.togglePopup();
+          }, 800);
+        }
+      }, 300);
     }
   }, [providers, selectedProvider, mapInitialized, onMarkerClick])
 

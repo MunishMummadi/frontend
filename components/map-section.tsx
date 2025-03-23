@@ -13,6 +13,7 @@ import { toast } from "@/components/ui/use-toast"
 import { ToastAction } from "@/components/ui/toast"
 import { useSearchParams } from "next/navigation"
 import { MapboxMap } from "@/components/mapbox-map"
+import { FilterSection, type FilterOptions } from "@/components/filter-section"
 
 // Base URL for backend API
 const API_BASE_URL = "http://localhost:3001/api/maps";
@@ -23,14 +24,32 @@ const DEFAULT_CENTER = {
   lng: -122.4194
 };
 
-function MapSectionContent() {
-  const [providers, setProviders] = useState<Provider[]>([])
-  const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null)
+// Extended provider interface with additional properties from API
+interface ExtendedProvider extends Provider {
+  openNow?: boolean;
+  priceLevel?: string;
+  website?: string;
+}
+
+function MapSectionContent({ filters: externalFilters }: { filters?: FilterOptions }) {
+  const [providers, setProviders] = useState<ExtendedProvider[]>([])
+  const [selectedProvider, setSelectedProvider] = useState<ExtendedProvider | null>(null)
   const [mapCenter, setMapCenter] = useState(DEFAULT_CENTER)
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null)
   const [activeMarker, setActiveMarker] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  
+  // Filter state - now synchronized with external filters
+  const [filters, setFilters] = useState<FilterOptions>({
+    type: "any",
+    specialty: "any",
+    priceRange: "any",
+    radius: 5000,
+    insurance: [] as string[],
+    minRating: 0
+  })
+  const [filtersApplied, setFiltersApplied] = useState(false)
   
   const { savedProviders, addProvider, removeProvider, isProviderSaved } = useSavedProviders()
   const searchParams = useSearchParams()
@@ -46,8 +65,8 @@ function MapSectionContent() {
           setUserLocation(currentLocation)
           setMapCenter(currentLocation)
           
-          // Load providers near this location
-          fetchProvidersNearLocation(latitude, longitude)
+          // Load providers near this location with any active filters
+          fetchProvidersNearLocation(latitude, longitude, filters)
         },
         (error) => {
           console.error("Error getting location:", error)
@@ -62,18 +81,49 @@ function MapSectionContent() {
       // Load default providers if geolocation is not supported
       fetchDefaultProviders()
     }
-  }, [])
+  }, [filters])
   
   // Load providers near a location using backend API
-  const fetchProvidersNearLocation = async (lat: number, lng: number) => {
+  const fetchProvidersNearLocation = async (lat: number, lng: number, filterOptions = filters) => {
     try {
       setIsLoading(true)
       setError(null)
       
-      console.log(`Fetching providers near: ${lat}, ${lng}`);
+      console.log(`Fetching providers near: ${lat}, ${lng} with filters:`, filterOptions);
       
-      // Use the updated unified providers endpoint with more parameters handled by backend
-      const url = `${API_BASE_URL}/providers?lat=${lat}&lng=${lng}&radius=5000`;
+      // Build query params with all filter options
+      let url = `${API_BASE_URL}/providers?lat=${lat}&lng=${lng}`;
+      
+      // Add radius parameter
+      url += `&radius=${filterOptions.radius}`;
+      
+      // Add type filter if not 'any'
+      if (filterOptions.type !== 'any') {
+        url += `&type=${encodeURIComponent(filterOptions.type)}`;
+      }
+      
+      // Add specialty filter if not 'any'
+      if (filterOptions.specialty !== 'any') {
+        url += `&specialty=${encodeURIComponent(filterOptions.specialty)}`;
+      }
+      
+      // Add price range filter if not 'any'
+      if (filterOptions.priceRange !== 'any') {
+        url += `&priceRange=${encodeURIComponent(filterOptions.priceRange)}`;
+      }
+      
+      // Add insurance filters if any selected
+      if (filterOptions.insurance && filterOptions.insurance.length > 0) {
+        filterOptions.insurance.forEach(insurance => {
+          url += `&insurance=${encodeURIComponent(insurance)}`;
+        });
+      }
+      
+      // Add min rating filter if specified
+      if (filterOptions.minRating > 0) {
+        url += `&minRating=${filterOptions.minRating}`;
+      }
+      
       console.log(`Calling API: ${url}`);
       
       const response = await fetch(url, {
@@ -123,7 +173,7 @@ function MapSectionContent() {
       }
       
       // Make sure all provider IDs are treated as strings
-      const formattedProviders: Provider[] = (data.providers || []).map((provider: any) => ({
+      const formattedProviders: ExtendedProvider[] = (data.providers || []).map((provider: any) => ({
         ...provider,
         id: String(provider.id || provider.placeId) // Ensure ID is a string, using placeId as fallback
       }));
@@ -142,7 +192,7 @@ function MapSectionContent() {
         // Show a helpful message if no providers were found
         toast({
           title: "No providers found",
-          description: "We couldn't find healthcare providers in this area. Try a different location or search term.",
+          description: `We couldn't find healthcare providers in this area ${filtersApplied ? "with the current filters" : ""}. ${filtersApplied ? "Try changing your filters." : "Try a different location or search term."}`,
           variant: "destructive"
         });
       }
@@ -164,13 +214,40 @@ function MapSectionContent() {
   }
   
   // Fetch default providers
-  const fetchDefaultProviders = async () => {
+  const fetchDefaultProviders = async (filterOptions = filters) => {
     try {
       setIsLoading(true)
       setError(null)
       
       // Use the unified providers endpoint with a default query
-      const response = await fetch(`${API_BASE_URL}/providers?query=healthcare provider`);
+      let url = `${API_BASE_URL}/providers?query=healthcare provider`;
+      
+      // Add filters if applied
+      if (filterOptions.type !== 'any') {
+        url += `&type=${encodeURIComponent(filterOptions.type)}`;
+      }
+      
+      if (filterOptions.specialty !== 'any') {
+        url += `&specialty=${encodeURIComponent(filterOptions.specialty)}`;
+      }
+      
+      if (filterOptions.priceRange !== 'any') {
+        url += `&priceRange=${encodeURIComponent(filterOptions.priceRange)}`;
+      }
+      
+      // Add insurance filters if any selected
+      if (filterOptions.insurance && filterOptions.insurance.length > 0) {
+        filterOptions.insurance.forEach(insurance => {
+          url += `&insurance=${encodeURIComponent(insurance)}`;
+        });
+      }
+      
+      // Add min rating filter if specified
+      if (filterOptions.minRating > 0) {
+        url += `&minRating=${filterOptions.minRating}`;
+      }
+      
+      const response = await fetch(url);
       
       if (!response.ok) {
         const errorText = await response.text();
@@ -199,7 +276,7 @@ function MapSectionContent() {
       }
       
       // Make sure all provider IDs are treated as strings
-      const formattedProviders: Provider[] = (data.providers || []).map((provider: any) => ({
+      const formattedProviders: ExtendedProvider[] = (data.providers || []).map((provider: any) => ({
         ...provider,
         id: String(provider.id || provider.placeId) // Ensure ID is a string, using placeId as fallback
       }));
@@ -225,21 +302,25 @@ function MapSectionContent() {
         title: "Error",
         description: err.message || "Failed to load providers. Please try again.",
         variant: "destructive",
-        action: <ToastAction altText="Try again" onClick={fetchDefaultProviders}>Try Again</ToastAction>,
+        action: <ToastAction altText="Try again" onClick={() => fetchDefaultProviders()}>Try Again</ToastAction>,
       })
     } finally {
       setIsLoading(false)
     }
   }
   
-  // Listen for search query parameter changes
-  useEffect(() => {
-    const searchQuery = searchParams.get('search')
-    if (searchQuery) {
-      // If search param exists, perform the search
-      performSearch(searchQuery)
+  // Handle filter changes
+  const handleFilterChange = (newFilters: FilterOptions) => {
+    setFilters(newFilters);
+    setFiltersApplied(true);
+    
+    // Apply the new filters
+    if (userLocation) {
+      fetchProvidersNearLocation(userLocation.lat, userLocation.lng, newFilters);
+    } else {
+      fetchDefaultProviders(newFilters);
     }
-  }, [searchParams])
+  };
   
   // Search for providers by query
   const performSearch = async (query: string) => {
@@ -255,6 +336,31 @@ function MapSectionContent() {
       // Add location parameters if available to improve search results
       if (userLocation) {
         url += `&lat=${userLocation.lat}&lng=${userLocation.lng}`;
+      }
+      
+      // Add current filters
+      if (filters.type !== 'any') {
+        url += `&type=${encodeURIComponent(filters.type)}`;
+      }
+      
+      if (filters.specialty !== 'any') {
+        url += `&specialty=${encodeURIComponent(filters.specialty)}`;
+      }
+      
+      if (filters.priceRange !== 'any') {
+        url += `&priceRange=${encodeURIComponent(filters.priceRange)}`;
+      }
+      
+      // Add insurance filters if any selected
+      if (filters.insurance && filters.insurance.length > 0) {
+        filters.insurance.forEach(insurance => {
+          url += `&insurance=${encodeURIComponent(insurance)}`;
+        });
+      }
+      
+      // Add min rating filter if specified
+      if (filters.minRating > 0) {
+        url += `&minRating=${filters.minRating}`;
       }
       
       const response = await fetch(url);
@@ -297,7 +403,7 @@ function MapSectionContent() {
         })
       } else {
         // Make sure all provider IDs are treated as strings
-        const formattedProviders: Provider[] = data.providers.map((provider: any) => ({
+        const formattedProviders: ExtendedProvider[] = data.providers.map((provider: any) => ({
           ...provider,
           id: String(provider.id || provider.placeId) // Ensure ID is a string, using placeId as fallback
         }));
@@ -336,7 +442,7 @@ function MapSectionContent() {
   }
   
   // Handle provider selection
-  const handleProviderSelect = (provider: Provider) => {
+  const handleProviderSelect = (provider: ExtendedProvider) => {
     setSelectedProvider(provider)
     setActiveMarker(String(provider.id))
     
@@ -350,7 +456,7 @@ function MapSectionContent() {
   }
   
   // Save/unsave provider
-  const handleSaveProvider = (provider: Provider) => {
+  const handleSaveProvider = (provider: ExtendedProvider) => {
     if (isProviderSaved(provider.id)) {
       removeProvider(provider.id)
       toast({
@@ -368,7 +474,7 @@ function MapSectionContent() {
   }
   
   // Handle marker click on map
-  const handleMarkerClick = (provider: Provider) => {
+  const handleMarkerClick = (provider: ExtendedProvider) => {
     setSelectedProvider(provider)
     setActiveMarker(String(provider.id))
   }
@@ -379,201 +485,193 @@ function MapSectionContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   
+  // Listen for search query parameter changes
+  useEffect(() => {
+    const searchQuery = searchParams.get('search')
+    if (searchQuery) {
+      // If search param exists, perform the search
+      performSearch(searchQuery)
+    }
+  }, [searchParams])
+  
+  // Update internal filters when external filters change
+  useEffect(() => {
+    if (externalFilters) {
+      setFilters(externalFilters);
+      setFiltersApplied(true);
+      
+      // Apply the new filters
+      if (userLocation) {
+        fetchProvidersNearLocation(userLocation.lat, userLocation.lng, externalFilters);
+      } else {
+        fetchDefaultProviders(externalFilters);
+      }
+    }
+  }, [externalFilters]);
+
   return (
-    <div className="grid gap-6 md:grid-cols-1 lg:grid-cols-1">
-      <Card className="w-full overflow-hidden">
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span>Map</span>
-            {isLoading && <span className="text-sm font-normal">Loading...</span>}
-            {userLocation ? (
-              <Button 
-                variant="ghost" 
-                size="sm"
-                onClick={() => {
-                  if (userLocation) {
-                    fetchProvidersNearLocation(userLocation.lat, userLocation.lng)
-                    setMapCenter(userLocation)
-                  }
-                }}
-                className="ml-auto flex items-center gap-1 text-xs"
-              >
-                <Locate className="h-4 w-4" />
-                <span>Refresh Nearby</span>
-              </Button>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={getCurrentLocation}
-                className="ml-auto flex items-center gap-1 text-xs"
-              >
-                <Locate className="h-4 w-4" />
-                <span>Use My Location</span>
-              </Button>
-            )}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {error ? (
-            <div className="flex h-[400px] items-center justify-center rounded-md border border-dashed p-10 text-center">
-              <div>
-                <p className="mb-2 text-sm text-muted-foreground">{error}</p>
-                <Button 
-                  size="sm" 
-                  onClick={() => {
-                    if (userLocation) {
-                      fetchProvidersNearLocation(userLocation.lat, userLocation.lng)
-                    } else {
-                      fetchDefaultProviders()
-                    }
-                  }}
-                >
-                  Try Again
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="relative w-full h-full rounded-md overflow-hidden">
-              {providers.length > 0 ? (
-                <div className="w-full h-full min-h-[350px] md:min-h-[400px] lg:min-h-[500px]">
-                  <MapboxMap
-                    providers={providers}
-                    center={mapCenter}
-                    selectedProvider={selectedProvider}
-                    onMarkerClick={handleMarkerClick}
-                  />
-                </div>
-              ) : (
-                <div className="flex h-[400px] items-center justify-center rounded-md border border-dashed">
-                  <div className="text-center">
-                    <p className="mb-2 text-sm text-muted-foreground">No healthcare providers found</p>
-                    <Button 
-                      size="sm" 
-                      onClick={fetchDefaultProviders}
-                    >
-                      Show Recommended Providers
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="md:col-span-1">
-          <h3 className="font-medium mb-2">Nearby Providers</h3>
-          <div className="h-[350px] overflow-y-auto pr-1 space-y-2">
-            {providers.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No providers found</p>
-            ) : (
-              providers.map(provider => (
-                <div
-                  key={provider.id}
-                  className={`p-3 border rounded-md cursor-pointer transition-colors ${activeMarker === String(provider.id) ? 'bg-primary/10 border-primary' : ''}`}
-                  onClick={() => handleProviderSelect(provider)}
-                >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <h4 className="font-medium">{provider.name}</h4>
-                      <p className="text-sm text-muted-foreground line-clamp-1">
-                        <MapPin className="h-3 w-3 inline mr-1" />
-                        {provider.address}
-                      </p>
-                    </div>
-                    <Badge variant="outline">{provider.type}</Badge>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between text-sm">
-                    <div className="flex items-center">
-                      <Star className="h-3 w-3 text-yellow-500 mr-1" />
-                      <span>
-                        {provider.rating} ({provider.reviews})
-                      </span>
-                    </div>
-                    <span>{provider.distance}</span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-        
-        <div className="md:col-span-2">
-          {selectedProvider && (
-            <div className="p-4 border rounded-md h-full">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="text-lg font-medium">{selectedProvider.name}</h3>
-                  <p className="text-muted-foreground">{selectedProvider.address}</p>
-                </div>
-                <Badge>{selectedProvider.type}</Badge>
-              </div>
-              
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                <div className="flex items-center gap-2">
-                  <Star className="h-4 w-4 text-yellow-500" />
-                  <span>{selectedProvider.rating} ({selectedProvider.reviews} reviews)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <DollarSign className="h-4 w-4" />
-                  <span>{selectedProvider.price}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Clock className="h-4 w-4" />
-                  <span>{selectedProvider.hours}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Phone className="h-4 w-4" />
-                  <span>{selectedProvider.phone}</span>
-                </div>
-              </div>
-              
-              <div className="mt-4">
-                <h4 className="font-medium mb-2">Accepted Insurance</h4>
-                <div className="flex flex-wrap gap-2">
-                  {selectedProvider.insurance && selectedProvider.insurance.map((ins, i) => (
-                    <Badge key={i} variant="outline">{ins}</Badge>
-                  ))}
-                </div>
-              </div>
-              
-              <div className="mt-4 flex justify-end gap-2">
-                <Button 
-                  variant="outline"
-                  onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${selectedProvider.address.replace(/ /g, '+')}`)}
-                >
-                  Get Directions
-                </Button>
-                {isProviderSaved(selectedProvider.id) ? (
+    <div className="grid gap-6">
+      {/* Map and Provider Details */}
+      <div className="space-y-6">
+        <Card className="w-full overflow-hidden">
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+              <span>Map</span>
+              <div className="flex items-center gap-2">
+                {isLoading && <span className="text-sm font-normal">Loading...</span>}
+                
+                {/* Location Button */}
+                {userLocation ? (
                   <Button 
-                    variant="default"
-                    onClick={() => handleSaveProvider(selectedProvider)}
+                    variant="ghost" 
+                    size="sm"
+                    onClick={() => {
+                      if (userLocation) {
+                        fetchProvidersNearLocation(userLocation.lat, userLocation.lng, filters)
+                        setMapCenter(userLocation)
+                      }
+                    }}
+                    className="flex items-center gap-1 text-xs"
                   >
-                    <BookmarkCheck className="h-4 w-4 mr-2" /> Saved
+                    <Locate className="h-4 w-4" />
+                    <span>Refresh Nearby</span>
                   </Button>
                 ) : (
-                  <Button 
-                    variant="default"
-                    onClick={() => handleSaveProvider(selectedProvider)}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={getCurrentLocation}
+                    className="flex items-center gap-1 text-xs"
                   >
-                    <Bookmark className="h-4 w-4 mr-2" /> Save
+                    <Locate className="h-4 w-4" />
+                    <span>Use My Location</span>
                   </Button>
                 )}
               </div>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {error ? (
+              <div className="flex h-[400px] items-center justify-center rounded-md border border-dashed p-10 text-center">
+                <div>
+                  <p className="mb-2 text-sm text-muted-foreground">{error}</p>
+                  <Button 
+                    size="sm" 
+                    onClick={() => {
+                      if (userLocation) {
+                        fetchProvidersNearLocation(userLocation.lat, userLocation.lng)
+                      } else {
+                        fetchDefaultProviders()
+                      }
+                    }}
+                  >
+                    Try Again
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="relative w-full h-full rounded-md overflow-hidden">
+                {providers.length > 0 ? (
+                  <div className="w-full h-full min-h-[350px] md:min-h-[400px] lg:min-h-[500px]">
+                    <MapboxMap
+                      providers={providers}
+                      center={mapCenter}
+                      selectedProvider={selectedProvider}
+                      onMarkerClick={handleMarkerClick}
+                    />
+                  </div>
+                ) : (
+                  <div className="flex h-[400px] items-center justify-center rounded-md border border-dashed">
+                    <div className="text-center">
+                      <p className="mb-2 text-sm text-muted-foreground">No healthcare providers found</p>
+                      <Button 
+                        size="sm" 
+                        onClick={() => fetchDefaultProviders()}
+                      >
+                        Show Recommended Providers
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Selected provider details */}
+        {selectedProvider && (
+          <div className="p-4 border rounded-md">
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="text-lg font-medium">{selectedProvider.name}</h3>
+                <p className="text-muted-foreground">{selectedProvider.address}</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={isProviderSaved(selectedProvider.id) ? 'text-primary' : ''}
+                onClick={() => handleSaveProvider(selectedProvider)}
+              >
+                {isProviderSaved(selectedProvider.id) ? (
+                  <BookmarkCheck className="h-5 w-5" />
+                ) : (
+                  <Bookmark className="h-5 w-5" />
+                )}
+              </Button>
             </div>
-          )}
-        </div>
+            
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {selectedProvider.rating && (
+                <div className="flex items-center">
+                  <Star className="h-4 w-4 text-yellow-500 mr-2" />
+                  <span>{selectedProvider.rating} ({selectedProvider.reviews || 0} reviews)</span>
+                </div>
+              )}
+              
+              {selectedProvider.openNow !== undefined && (
+                <div className="flex items-center">
+                  <Clock className="h-4 w-4 mr-2" />
+                  <span>{selectedProvider.openNow ? 'Open now' : 'Closed'}</span>
+                </div>
+              )}
+              
+              {selectedProvider.phone && (
+                <div className="flex items-center">
+                  <Phone className="h-4 w-4 mr-2" />
+                  <a href={`tel:${selectedProvider.phone}`} className="hover:underline">{selectedProvider.phone}</a>
+                </div>
+              )}
+              
+              {selectedProvider.priceLevel && (
+                <div className="flex items-center">
+                  <DollarSign className="h-4 w-4 mr-2" />
+                  <span>{'$'.repeat(parseInt(selectedProvider.priceLevel))}</span>
+                </div>
+              )}
+            </div>
+            
+            {selectedProvider.website && (
+              <div className="mt-4">
+                <Button asChild variant="outline" size="sm" className="w-full">
+                  <a href={selectedProvider.website} target="_blank" rel="noopener noreferrer">
+                    Visit Website
+                  </a>
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
-// Wrapped in Suspense boundary for useSearchParams hook
-export function MapSection() {
+function MapSection({ filters }: { filters?: FilterOptions }) {
   return (
-    <Suspense fallback={<div>Loading map section...</div>}>
-      <MapSectionContent />
+    <Suspense fallback={<div>Loading map...</div>}>
+      <MapSectionContent filters={filters} />
     </Suspense>
   )
 }
+
+export { MapSection }
