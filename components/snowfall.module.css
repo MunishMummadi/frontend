@@ -15,8 +15,8 @@
   color: white;
   text-shadow: 0 0 5px rgba(255, 255, 255, 0.8);
   animation-name: snowfall;
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
+  animation-timing-function: ease-in;
+  animation-iteration-count: 1;
   filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.3));
   line-height: 1;
   user-select: none;
@@ -25,11 +25,16 @@
 @keyframes snowfall {
   0% {
     transform: translateY(0) rotate(0deg);
+    opacity: 0.2;
   }
-  50% {
-    transform: translateY(50vh) rotate(180deg);
+  10% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 0.8;
   }
   100% {
     transform: translateY(calc(100vh + 30px)) rotate(360deg);
+    opacity: 0;
   }
 }
