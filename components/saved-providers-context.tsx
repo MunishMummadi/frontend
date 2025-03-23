@@ -15,6 +15,8 @@ export type Provider = {
   hours: string
   phone: string
   insurance: string[]
+  lat: number | string  // Added to support map functionality
+  lng: number | string  // Added to support map functionality
 }
 
 type SavedProvidersContextType = {
@@ -74,4 +76,3 @@ export function useSavedProviders() {
   }
   return context
 }
-
